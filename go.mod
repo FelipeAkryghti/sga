@@ -1,4 +1,4 @@
-module api-gin
+module sga
 
 go 1.22
 
