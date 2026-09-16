@@ -1,98 +1,113 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Aluno struct {
-	ID        int    `json:"id"`
-	Nome      string `json:"nome"`
 	Matricula string `json:"matricula"`
-	TurmaID   int    `json:"turmaId"`
+	Nome      string `json:"nome"`
+	Email     string `json:"email"`
 }
 
 var alunos = []Aluno{}
-var proximoIDAluno = 1
 
-func handleAlunos(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		listarAlunos(w, r)
-	case http.MethodPost:
-		criarAluno(w, r)
-	case http.MethodPut:
-		atualizarAluno(w, r)
-	case http.MethodDelete:
-		excluirAluno(w, r)
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write([]byte("Método não permitido"))
+func procurarAluno(matricula string) int {
+	for i, aluno := range alunos {
+		if aluno.Matricula == matricula {
+			return i
+		}
 	}
+	return -1
+}
+// matrícula precisa ter exatamente 9 dígitos
+func matriculaValida(matricula string) bool {
+	if len(matricula) != 9 {
+		return false
+	}
+	for i := 0; i < len(matricula); i++ {
+		if matricula[i] < '0' || matricula[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
-func listarAlunos(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(alunos)
+func listarAlunos(c *gin.Context) {
+	c.JSON(http.StatusOK, alunos)
 }
 
-func criarAluno(w http.ResponseWriter, r *http.Request) {
-	var aluno Aluno
-	err := json.NewDecoder(r.Body).Decode(&aluno)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("JSON inválido"))
+func buscarAluno(c *gin.Context) {
+	i := procurarAluno(c.Param("matricula"))
+	if i == -1 {
+		c.JSON(http.StatusNotFound, gin.H{"erro": "Aluno não encontrado"})
 		return
 	}
 
-	aluno.ID = proximoIDAluno
-	proximoIDAluno++
+	c.JSON(http.StatusOK, alunos[i])
+}
+
+func criarAluno(c *gin.Context) {
+	var aluno Aluno
+	err := c.ShouldBindJSON(&aluno)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "JSON inválido"})
+		return
+	}
+
+	if !matriculaValida(aluno.Matricula) {
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "Matrícula deve ter 9 dígitos"})
+		return
+	}
+
+	if procurarAluno(aluno.Matricula) != -1 {
+		c.JSON(http.StatusConflict, gin.H{"erro": "Já existe um aluno com essa matrícula"})
+		return
+	}
+
 	alunos = append(alunos, aluno)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(aluno)
+	c.JSON(http.StatusCreated, aluno)
 }
 
-func atualizarAluno(w http.ResponseWriter, r *http.Request) {
+func atualizarAluno(c *gin.Context) {
+	i := procurarAluno(c.Param("matricula"))
+	if i == -1 {
+		c.JSON(http.StatusNotFound, gin.H{"erro": "Aluno não encontrado"})
+		return
+	}
+
 	var alunoAtualizado Aluno
-	err := json.NewDecoder(r.Body).Decode(&alunoAtualizado)
+	err := c.ShouldBindJSON(&alunoAtualizado)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("JSON inválido"))
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "JSON inválido"})
 		return
 	}
 
-	for i, aluno := range alunos {
-		if aluno.ID == alunoAtualizado.ID {
-			alunos[i] = alunoAtualizado
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(alunoAtualizado)
-			return
-		}
-	}
+	alunos[i].Nome = alunoAtualizado.Nome
+	alunos[i].Email = alunoAtualizado.Email
 
-	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte("Aluno não encontrado"))
+	c.JSON(http.StatusOK, alunos[i])
 }
 
-func excluirAluno(w http.ResponseWriter, r *http.Request) {
-	var alunoExcluido Aluno
-	err := json.NewDecoder(r.Body).Decode(&alunoExcluido)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("JSON inválido"))
+func excluirAluno(c *gin.Context) {
+	matricula := c.Param("matricula")
+
+	i := procurarAluno(matricula)
+	if i == -1 {
+		c.JSON(http.StatusNotFound, gin.H{"erro": "Aluno não encontrado"})
 		return
 	}
 
-	for i, aluno := range alunos {
-		if aluno.ID == alunoExcluido.ID {
-			alunos = append(alunos[:i], alunos[i+1:]...)
-			w.WriteHeader(http.StatusNoContent)
+	for _, turma := range turmas {
+		if alunoEstaNaTurma(turma, matricula) {
+			c.JSON(http.StatusConflict, gin.H{"erro": "Aluno está matriculado na turma " + turma.Nome})
 			return
 		}
 	}
 
-	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte("Aluno não encontrado"))
+	alunos = append(alunos[:i], alunos[i+1:]...)
+	c.Status(http.StatusNoContent)
 }
