@@ -1,8 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Sala struct {
@@ -15,33 +17,30 @@ type Sala struct {
 var salas = []Sala{}
 var proximoIDSala = 1
 
-func handleSalas(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		listarSalas(w, r)
-	case http.MethodPost:
-		criarSala(w, r)
-	case http.MethodPut:
-		atualizarSala(w, r)
-	case http.MethodDelete:
-		excluirSala(w, r)
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write([]byte("Método não permitido"))
+// devolve a posição da sala na lista, ou -1 se não existir
+func procurarSala(id int) int {
+	for i, sala := range salas {
+		if sala.ID == id {
+			return i
+		}
 	}
+	return -1
 }
 
-func listarSalas(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(salas)
+func listarSalas(c *gin.Context) {
+	c.JSON(http.StatusOK, salas)
 }
 
-func criarSala(w http.ResponseWriter, r *http.Request) {
+func criarSala(c *gin.Context) {
 	var sala Sala
-	err := json.NewDecoder(r.Body).Decode(&sala)
+	err := c.ShouldBindJSON(&sala)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("JSON inválido"))
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "JSON inválido"})
+		return
+	}
+
+	if sala.Capacidade <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "Capacidade deve ser maior que zero"})
 		return
 	}
 
@@ -49,50 +48,63 @@ func criarSala(w http.ResponseWriter, r *http.Request) {
 	proximoIDSala++
 	salas = append(salas, sala)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(sala)
+	c.JSON(http.StatusCreated, sala)
 }
 
-func atualizarSala(w http.ResponseWriter, r *http.Request) {
+func atualizarSala(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "ID inválido"})
+		return
+	}
+
+	i := procurarSala(id)
+	if i == -1 {
+		c.JSON(http.StatusNotFound, gin.H{"erro": "Sala não encontrada"})
+		return
+	}
+
 	var salaAtualizada Sala
-	err := json.NewDecoder(r.Body).Decode(&salaAtualizada)
+	err = c.ShouldBindJSON(&salaAtualizada)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("JSON inválido"))
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "JSON inválido"})
 		return
 	}
 
-	for i, sala := range salas {
-		if sala.ID == salaAtualizada.ID {
-			salas[i] = salaAtualizada
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(salaAtualizada)
-			return
-		}
+	if salaAtualizada.Capacidade <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "Capacidade deve ser maior que zero"})
+		return
 	}
 
-	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte("Sala não encontrada"))
+	// o ID não muda, só os dados da sala
+	salas[i].Nome = salaAtualizada.Nome
+	salas[i].Capacidade = salaAtualizada.Capacidade
+	salas[i].Recursos = salaAtualizada.Recursos
+
+	c.JSON(http.StatusOK, salas[i])
 }
 
-func excluirSala(w http.ResponseWriter, r *http.Request) {
-	var salaExcluida Sala
-	err := json.NewDecoder(r.Body).Decode(&salaExcluida)
+func excluirSala(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("JSON inválido"))
+		c.JSON(http.StatusBadRequest, gin.H{"erro": "ID inválido"})
 		return
 	}
 
-	for i, sala := range salas {
-		if sala.ID == salaExcluida.ID {
-			salas = append(salas[:i], salas[i+1:]...)
-			w.WriteHeader(http.StatusNoContent)
+	i := procurarSala(id)
+	if i == -1 {
+		c.JSON(http.StatusNotFound, gin.H{"erro": "Sala não encontrada"})
+		return
+	}
+
+	// não deixa excluir uma sala que está em uso por alguma turma
+	for _, turma := range turmas {
+		if turma.Alocada && turma.SalaID == id {
+			c.JSON(http.StatusConflict, gin.H{"erro": "Sala está alocada na turma " + turma.Nome})
 			return
 		}
 	}
 
-	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte("Sala não encontrada"))
+	salas = append(salas[:i], salas[i+1:]...)
+	c.Status(http.StatusNoContent)
 }
